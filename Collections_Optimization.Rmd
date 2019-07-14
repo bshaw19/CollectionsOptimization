@@ -1,0 +1,150 @@
+---
+title: "Cannaline"
+author: "Brandon Shaw"
+date: "June 30, 2019"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE,warning=FALSE,message=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE,message=FALSE)
+```
+
+```{r,warning=FALSE,message=FALSE}
+library(readxl)
+Input_Data <- read_excel("C:/Users/Brandon/Desktop/<REVENUE_DATA_FILE>/Input_Data.xlsx", 
+    col_types = c("text", "text", "date", 
+        "text", "date", "numeric", "text", 
+        "numeric"))
+
+df <- Input_Data
+summary(df)
+```
+
+```{r}
+library(stringr)
+
+invoices <- as.double(df$`Invoice Date`)
+due_dates <- as.double(df$`Date Due`)
+
+df$InvoiceDouble <- invoices
+df$DueDouble <- due_dates
+
+df$Payment_Time <- df$DueDouble - df$InvoiceDouble
+df$Payment_Time <- as.factor(df$Payment_Time)
+df$Customer <- as.factor(df$Customer)
+
+input_df <- df[,c(1,2,6,9,10,11)]
+input_df$Collect <- df$Paid
+
+colnames(input_df) <- str_replace_all(colnames(input_df), fixed(" "), "")
+
+input_df$Collect[is.na(input_df$Collect)] <- 0
+
+summary(input_df)
+
+input_df$Payment_Time <- as.double(input_df$Payment_Time)
+input_df$DueDouble <- as.double(input_df$DueDouble)
+input_df$InvoiceDouble <- as.double(input_df$InvoiceDouble)
+
+
+input_df$Payment_Time[is.na(input_df$Payment_Time)] <- -1
+input_df$DueDouble[is.na(input_df$DueDouble)] <- -1
+input_df$InvoiceDouble[is.na(input_df$InvoiceDouble)] <- -1
+
+input_df$Customer <- as.factor(input_df$Customer)
+
+summary(input_df)
+
+binomial_model <- glm(Collect ~ InvoiceDouble + DueDouble + Payment_Time + InvoiceDouble, family='binomial', data=input_df)
+
+summary(binomial_model)
+```
+
+
+```{r}
+input_df <- input_df[sample(1:nrow(input_df)),]
+```
+
+```{r}
+
+
+samplesize <- .7
+
+input_sample <- input_df[1:round(samplesize*nrow(input_df)),]
+input_test_sample <- input_df[round(samplesize*nrow(input_df)):nrow(input_df),]
+  
+
+binomial_model <- glm(Collect ~ InvoiceDouble + DueDouble + Payment_Time, family='binomial', data=input_sample)
+
+predictions <- predict(binomial_model,newdata = input_test_sample)
+
+predictions <- predict(binomial_model,newdata = input_test_sample, type='response')
+
+tab <- cbind(round(predictions),input_test_sample$Collect)
+
+table(tab[,1],tab[,2])
+
+prediction_df <- data.frame(cbind(predictions,input_test_sample$Collect))
+colnames(prediction_df)[2] <- 'ActualCollect'
+
+boxplot(predictions~ActualCollect,data=prediction_df, main = "Prediction Distribution", xlab = "Actual Payment", ylab = "Prediction")
+
+collection_score <- predict(binomial_model, newdata=input_df,type='response')
+
+input_df$collectionScore <- collection_score
+  
+```
+
+
+```{r}
+collection_predictions <- input_df[,c(1,2,3,7,8)]
+
+uncollected_predictions <- collection_predictions[collection_predictions$Collect==0,]
+
+uncollected_predictions <- uncollected_predictions[order(-uncollected_predictions$collectionScore),]
+
+uncollected_predictions$collectionScore <- round(uncollected_predictions$collectionScore*100,4)
+
+hist(uncollected_predictions$collectionScore,breaks=100)
+
+uncollected_predictions$expected_return <- round((uncollected_predictions$collectionScore/100)*uncollected_predictions$AmountDue,2)
+
+uncollected_predictions <- uncollected_predictions[order(-uncollected_predictions$expected_return),]
+
+
+
+
+write.csv(uncollected_predictions,file='Model_Collections_Predictions.csv')
+```
+
+```{r}
+returns_df <- aggregate(uncollected_predictions$expected_return, list(uncollected_predictions$Customer), sum)
+
+colnames(returns_df) <- c("Customer","ExpectedReturn")
+
+sorted_returns <- returns_df[order(-returns_df$ExpectedReturn),]
+
+rownames(sorted_returns) <- NULL
+
+avgPred <- aggregate(uncollected_predictions$collectionScore, list(uncollected_predictions$Customer), mean)
+colnames(avgPred) <- c("Customer", "AvgPred")
+maxPred <- aggregate(uncollected_predictions$collectionScore, list(uncollected_predictions$Customer), max)
+colnames(maxPred) <- c("Customer", "maxPred")
+minPred <- aggregate(uncollected_predictions$collectionScore, list(uncollected_predictions$Customer), min)
+colnames(minPred) <- c("Customer", "minPred")
+Orders <-  aggregate(uncollected_predictions$Customer, list(uncollected_predictions$Customer), length)
+colnames(Orders) <- c("Customer", "Orders")
+
+merge1 <- merge(avgPred, maxPred)
+merge2 <- merge(merge1, minPred)
+merge3 <- merge(merge1, Orders)
+
+sorted_returns <- merge(sorted_returns, merge3)
+sorted_returns <- sorted_returns[order(-sorted_returns$ExpectedReturn),]
+
+write.csv(sorted_returns, file="SortedExpectedReturns.csv")
+```
+
